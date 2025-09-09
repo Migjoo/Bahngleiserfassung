@@ -12,16 +12,20 @@ Die Bewertung ist **erklärbar** (Regeln + RDF-artige Tripel).
 ---
 
 ## 🧭 Inhalt
-- [✨ Features](#-features)
-- [🏗️ Projektstruktur](#️-projektstruktur)
-- [🚀 Schnellstart](#-schnellstart)
-- [⚙️ Konfiguration](#️-konfiguration)
-- [🖥️ Nutzung](#️-nutzung)
-- [🧠 Was ist eine Ontologie?](#-was-ist-eine-ontologie)
-- [🧪 Tests & Tripel-Export](#-tests--tripel-export)
-- [🛡️ Sicherheit (Secrets)](#️-sicherheit-secrets)
-- [🧰 Troubleshooting](#-troubleshooting)
-- [📄 Lizenz](#-lizenz)
+- [🚆 Bahngleiserfassung – Video Frame Analyzer (Streamlit + HF + Ontologie)](#-bahngleiserfassung--video-frame-analyzer-streamlit--hf--ontologie)
+  - [🧭 Inhalt](#-inhalt)
+  - [✨ Features](#-features)
+  - [🏗️ Projektstruktur](#️-projektstruktur)
+  - [🚀 Schnellstart](#-schnellstart)
+  - [⚙️ Konfiguration](#️-konfiguration)
+  - [🖥️ Nutzung](#️-nutzung)
+  - [🧠 Was ist eine Ontologie?](#-was-ist-eine-ontologie)
+  - [🧪 Tests \& Tripel-Export](#-tests--tripel-export)
+  - [🛡️ Sicherheit (Secrets)](#️-sicherheit-secrets)
+  - [🧰 Troubleshooting](#-troubleshooting)
+  - [📄 Lizenz](#-lizenz)
+  - [🔌 Integration](#-integration)
+  - [🧩 Erweiterung](#-erweiterung)
 
 ---
 
@@ -206,3 +210,6 @@ print(triples_to_turtle(decision_to_triples(dec, obs, ctx)))
 * Neue Klassen/Properties ergänzen (z. B. `Kinderwagen`, `Warnweste`)
 * Weitere Regeln (z. B. „Sperrbereich aktiv“ ⇒ höhere Schwere)
 * Export als **TTL/JSON-LD/CSV** für Downstream-Systeme
+
+
+test
