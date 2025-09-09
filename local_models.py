@@ -49,6 +49,11 @@ class CNNImageCaptioner:
                 return f"Model loading failed: {load_result}"
         
         try:
+            # Handle counting prompts specially
+            if prompt and any(word in prompt.lower() for word in ['count', 'how many', 'number of']):
+                # For counting prompts, use better strategy
+                return self._handle_counting_prompt(image, prompt)
+            
             # Prepare inputs
             if prompt:
                 inputs = self.processor(image, prompt, return_tensors="pt").to(self.device)
@@ -70,6 +75,78 @@ class CNNImageCaptioner:
             
         except Exception as e:
             return f"Error generating caption: {str(e)}"
+    
+    def _handle_counting_prompt(self, image: Image.Image, original_prompt: str) -> str:
+        """Handle counting prompts with better strategy"""
+        try:
+            # Generate multiple descriptions
+            descriptions = []
+            
+            # Basic scene description (no prompt - works better)
+            inputs_basic = self.processor(image, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                out_basic = self.model.generate(**inputs_basic, max_length=50, num_beams=4)
+            basic_desc = self.processor.decode(out_basic[0], skip_special_tokens=True)
+            descriptions.append(basic_desc)
+            
+            # People-focused description
+            inputs_people = self.processor(image, "describe people in this image", return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                out_people = self.model.generate(**inputs_people, max_length=50, num_beams=4)
+            people_desc = self.processor.decode(out_people[0], skip_special_tokens=True)
+            if people_desc.startswith("describe people in this image"):
+                people_desc = people_desc[len("describe people in this image"):].strip()
+            descriptions.append(people_desc)
+            
+            # Analyze for counting
+            combined_text = " ".join(descriptions).lower()
+            count_result = self._extract_count_from_text(combined_text, original_prompt)
+            
+            return count_result
+            
+        except Exception as e:
+            return f"Counting analysis failed: {str(e)}"
+    
+    def _extract_count_from_text(self, text: str, original_prompt: str) -> str:
+        """Extract count information from text descriptions"""
+        import re
+        
+        # Define patterns
+        people_words = ['person', 'people', 'man', 'woman', 'worker', 'workers', 'individual', 'human']
+        number_words = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'a': 1, 'single': 1, 'couple': 2, 'few': 3, 'several': 4, 'many': 5
+        }
+        track_words = ['track', 'tracks', 'rail', 'rails', 'railway', 'railroad']
+        
+        # Extract numbers
+        explicit_numbers = re.findall(r'\b(\d+)\b', text)
+        explicit_numbers = [int(n) for n in explicit_numbers if 1 <= int(n) <= 20]
+        
+        # Count mentions
+        people_mentions = sum(1 for word in people_words if word in text)
+        track_mentions = sum(1 for word in track_words if word in text)
+        
+        # Find number words
+        found_numbers = [num for word, num in number_words.items() if word in text]
+        
+        # Determine count
+        estimated_count = 0
+        if explicit_numbers:
+            estimated_count = explicit_numbers[0]
+        elif found_numbers:
+            estimated_count = max(found_numbers)
+        elif people_mentions > 0:
+            estimated_count = people_mentions
+        
+        # Build response
+        if estimated_count > 0:
+            if track_mentions > 0:
+                return f"Detected approximately {estimated_count} person{'s' if estimated_count > 1 else ''} in railway scene. Scene: {text[:100]}..."
+            else:
+                return f"Detected approximately {estimated_count} person{'s' if estimated_count > 1 else ''} in image. Scene: {text[:100]}..."
+        else:
+            return f"No clear person count detected. Scene description: {text[:150]}..."
 
 
 class TransformerImageCaptioner:

@@ -168,11 +168,15 @@ def render_frame_result(result_data: Dict[str, Any]):
     Render a single frame result with ontology analysis
     """
     ontology = result_data['ontology_analysis']
-    severity_icon = ontology.get('severity_icon', '✅')
-    severity = ontology.get('severity', 'NONE')
     
-    # Create expander title with severity indicator
-    expander_title = f"{severity_icon} {severity} - Frame {result_data['frame_number']} (t={result_data['timestamp']:.1f}s)"
+    # Create expander title - only include severity if ontology is active
+    if ontology.get('ontology_used', False):
+        severity_icon = ontology.get('severity_icon', '✅')
+        severity = ontology.get('severity', 'NONE')
+        expander_title = f"{severity_icon} {severity} - Frame {result_data['frame_number']} (t={result_data['timestamp']:.1f}s)"
+    else:
+        # Clean title without severity symbols when ontology is disabled
+        expander_title = f"Frame {result_data['frame_number']} (t={result_data['timestamp']:.1f}s)"
     
     with st.expander(expander_title):
         col_img, col_text = st.columns([1, 2])
