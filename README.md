@@ -1,3 +1,15 @@
+---
+title: Bahngleis-Detektor
+emoji: 🚉
+colorFrom: blue
+colorTo: gray
+sdk: docker
+sdk_version: "1.0"
+app_file: app.py
+pinned: false
+---
+
+
 # 🚆 Bahngleiserfassung – Video Frame Analyzer (Streamlit + HF + Ontologie)
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](#)
