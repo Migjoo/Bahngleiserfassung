@@ -153,13 +153,29 @@ def validate_inputs(video_file, prompt, config, local_models_available):
         return False
     
     return True
+# --- Passwort-Check (aus secrets oder Env) ---
+import os
+
+def check_password() -> bool:
+    st.sidebar.title("🔐 Zugriff")
+    password = st.sidebar.text_input("Passwort", type="password")
+
+    if password == "rexhbeqaj":  # <-- dein Passwort hier
+        st.sidebar.success("Zugang erlaubt ✅")
+        return True
+    elif password:
+        st.sidebar.error("❌ Falsches Passwort")
+    return False
+
+
 
 
 def main():
     """Main application entry point"""
     # Initialize application
     initialize_app()
-    
+    if not check_password():
+        st.stop()
     # Load settings and setup models
     settings = load_settings()
     local_manager, local_models_available = setup_local_models()
