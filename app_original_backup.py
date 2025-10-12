@@ -440,7 +440,7 @@ def main():
             )
         
         # Process button
-        process_button = st.button("Process Video", type="primary")
+        process_button = st.button("Video auswählen", type="primary")
     
     with col2:
         st.header("Results")

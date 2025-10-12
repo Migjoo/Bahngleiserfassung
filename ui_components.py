@@ -23,7 +23,7 @@ def render_sidebar_config(settings: Dict, local_models_available: bool, local_ma
     Returns configuration settings
     """
     with st.sidebar:
-        st.header("Configuration")
+        st.header("Konfiguration")
         
         # Model type selection
         available_options = []
@@ -34,7 +34,7 @@ def render_sidebar_config(settings: Dict, local_models_available: bool, local_ma
         model_type = st.radio(
             "Model Type",
             available_options,
-            help="Choose between local AI models or remote Hugging Face API"
+            help="Wähle zwischen den KI-Modellen"
         )
         
         # Model selection based on type
@@ -75,11 +75,21 @@ def render_sidebar_config(settings: Dict, local_models_available: bool, local_ma
 def _render_local_model_config(local_manager) -> tuple:
     """Render local model configuration"""
     available_local_models = local_manager.get_available_models()
+
+    # Standard-Auswahl auf "Person on Track Detector" setzen (falls vorhanden)
+    default_index = (
+        available_local_models.index("Person on Track Detector")
+        if "Person on Track Detector" in available_local_models else 0
+    )
+
     selected_model = st.selectbox(
-        "Select Local Model",
+        "Lokales Modell auswählen",
         options=available_local_models,
+        index=default_index,  # <-- diese Zeile ist neu
         help="Choose between CNN (fast) or Transformer (detailed) models"
     )
+
+
     
     # Show model info
     model_info = local_manager.get_model_info()
@@ -141,7 +151,7 @@ def render_prompt_section(config: Dict[str, Any]) -> str:
     if (model_type == "Local Models" and 
         selected_model == "Person on Track Detector"):
         # Person on Track Detector works automatically
-        st.info("🤖 Person on Track Detector works automatically - no prompt needed!")
+        st.info("🤖Das Modell ist mit einem ontologiebasierten Ansatz gefüttert und erfordert keinen Prompt")
         return "automatic"
     else:
         # Regular models need user prompt

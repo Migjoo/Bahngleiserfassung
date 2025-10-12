@@ -54,13 +54,13 @@ def initialize_local_models():
 def initialize_app():
     """Initialize the Streamlit application"""
     st.set_page_config(
-        page_title="Video Frame Analyzer with Ontology",
+        page_title="Masterarbeit – Prototyp zur Bahngleiserfassung",
         page_icon="🎥",
         layout="wide"
     )
     
-    st.title("🎥 Video Frame Analyzer with Ontology-Based Risk Assessment")
-    st.markdown("Upload a video and analyze frames using AI models with ontology-based safety classification")
+    st.title("🎥 Masterarbeit – Prototyp zur Bahngleiserfassung")
+    st.markdown(" Dieses Tool wurde im Rahmen einer Masterarbeit entwickelt. Es dient zur **Analyse von Videoaufnahmen auf sicherheitskritische Situationen** im Bahnumfeld. Der Prototyp verwendet **lokale KI-Modelle**, um Personen im Gleisbereich zu erkennen,  und kombiniert diese Erkennung mit einer ontologiebasierten Risikobewertung zur Einschätzung  potenzieller Gefahren.")
 
 
 def setup_local_models():
@@ -72,7 +72,7 @@ def setup_local_models():
         try:
             local_manager = initialize_local_models()
             local_models_available = True
-            st.success("🤖 Local AI models initialized successfully!")
+            st.success("🤖 Die lokalen Modelle wurden erfolgreich geladen.!")
         except Exception as e:
             st.warning(f"Local AI models not available: {str(e)}")
             st.info("💡 Install AI packages: `pip install torch torchvision transformers accelerate sentencepiece`")
