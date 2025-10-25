@@ -5,6 +5,7 @@ Refactored for better code organization and maintainability
 """
 import streamlit as st
 import json
+import time
 from dotenv import load_dotenv
 
 # Import our modular components
@@ -85,14 +86,16 @@ def setup_local_models():
 
 def process_video_frames(video_file, config, local_manager=None):
     """
-    Process all frames in the video and return results
+    Process all frames in the video and return results along with processing duration
     """
+    start_time = time.time()
+    
     # Extract frames
     frames = extract_frames_from_video(video_file, config["fps"])
     
     if not frames:
         st.error("No frames could be extracted from the video")
-        return []
+        return [], 0.0
     
     st.success(f"Extracted {len(frames)} frames from video")
     
@@ -129,7 +132,73 @@ def process_video_frames(video_file, config, local_manager=None):
             
             progress_bar.progress((i + 1) / len(frames))
     
-    return results
+    progress_bar.empty()
+    processing_duration = time.time() - start_time
+    
+    return results, processing_duration
+
+
+def frame_is_hazardous(result_data: dict) -> bool:
+    """Return True if the frame indicates a hazardous situation."""
+    result = result_data.get('result', {})
+    ontology = result_data.get('ontology_analysis', {})
+    
+    severity = (ontology.get('severity') or '').upper()
+    if severity and severity != 'NONE':
+        return True
+    
+    if isinstance(result, dict):
+        detection = result.get('person_on_track_detection')
+        if isinstance(detection, dict):
+            if detection.get('person_on_track'):
+                return True
+    
+    return False
+
+
+def render_analysis_results(container, results, processing_duration, use_ontology):
+    """Render the list of frame results with optional filtering."""
+    with container:
+        st.subheader("Analysis Results")
+        st.caption(f"Verarbeitungsdauer: {processing_duration:.1f} Sekunden")
+
+        # Display summary statistics
+        severity_counts = {}
+        for result in results:
+            severity = result['ontology_analysis'].get('severity', 'NONE')
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+        if use_ontology and severity_counts:
+            st.write("**Summary:**")
+            summary_cols = st.columns(len(severity_counts))
+            icon_map = {
+                'NONE': '✅',
+                'LOW': '🟢',
+                'MEDIUM': '🟠',
+                'HIGH': '⚠️',
+                'CRITICAL': '🚨'
+            }
+            for i, (severity, count) in enumerate(severity_counts.items()):
+                with summary_cols[i]:
+                    st.metric(f"{icon_map.get(severity, '❔')} {severity}", count)
+            st.divider()
+
+        if 'filter_hazard_frames' not in st.session_state:
+            st.session_state['filter_hazard_frames'] = False
+
+        show_only_hazard = st.checkbox(
+            "Nur kritische Frames anzeigen",
+            key="filter_hazard_frames"
+        )
+
+        displayed_results = results
+        if show_only_hazard:
+            displayed_results = [res for res in results if frame_is_hazardous(res)]
+            if not displayed_results:
+                st.info("Kein Frame verbleibt nach Anwendung des Filters.")
+
+        for result_data in displayed_results:
+            render_frame_result(result_data)
 
 
 def validate_inputs(video_file, prompt, config, local_models_available):
@@ -184,6 +253,11 @@ def main():
     settings = load_settings()
     local_manager, local_models_available = setup_local_models()
     
+    if 'last_results' not in st.session_state:
+        st.session_state['last_results'] = None
+        st.session_state['last_duration'] = 0.0
+        st.session_state['last_use_ontology'] = False
+    
     # Create main layout
     col1, col2 = st.columns([1, 1])
     
@@ -213,34 +287,19 @@ def main():
             
             with st.spinner("Processing video..."):
                 # Process video frames
-                results = process_video_frames(video_file, config, local_manager)
-                
-                # Display results
-                if results:
-                    with results_container:
-                        st.subheader("Analysis Results")
-                        
-                        # Display summary statistics
-                        severity_counts = {}
-                        for result in results:
-                            severity = result['ontology_analysis'].get('severity', 'NONE')
-                            severity_counts[severity] = severity_counts.get(severity, 0) + 1
-                        
-                        if config["use_ontology"] and severity_counts:
-                            st.write("**Summary:**")
-                            summary_cols = st.columns(len(severity_counts))
-                            for i, (severity, count) in enumerate(severity_counts.items()):
-                                icon_map = {
-                                    'NONE': '✅', 'LOW': '🟢', 'MEDIUM': '🟠', 
-                                    'HIGH': '⚠️', 'CRITICAL': '🚨'
-                                }
-                                with summary_cols[i]:
-                                    st.metric(f"{icon_map.get(severity, '❓')} {severity}", count)
-                            st.divider()
-                        
-                        # Display individual frame results
-                        for result_data in results:
-                            render_frame_result(result_data)
+                results, processing_duration = process_video_frames(video_file, config, local_manager)
+            
+            if results:
+                st.session_state['last_results'] = results
+                st.session_state['last_duration'] = processing_duration
+                st.session_state['last_use_ontology'] = config["use_ontology"]
+                st.session_state['filter_hazard_frames'] = False
+                render_analysis_results(
+                    results_container,
+                    results,
+                    processing_duration,
+                    config["use_ontology"]
+                )
         else:
             # Show validation errors
             render_validation_errors(
@@ -248,9 +307,18 @@ def main():
                 config["model_type"], local_models_available, config["selected_model"]
             )
     
+    elif st.session_state.get('last_results'):
+        render_analysis_results(
+            results_container,
+            st.session_state['last_results'],
+            st.session_state['last_duration'],
+            st.session_state['last_use_ontology']
+        )
+
     # Render instructions
     render_instructions()
 
 
 if __name__ == "__main__":
     main()
+
