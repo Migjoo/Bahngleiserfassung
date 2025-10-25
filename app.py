@@ -114,11 +114,15 @@ def process_video_frames(video_file, config, local_manager=None):
             
             # Apply ontology analysis
             ontology_analysis = analyze_scene_with_ontology(scene_description, config["use_ontology"])
+
+            annotated_image = None
+            if isinstance(result, dict):
+                annotated_image = result.pop('annotated_image', None)
             
             results.append({
                 'frame_number': frame_data['frame_number'],
                 'timestamp': frame_data['timestamp'],
-                'image': frame_data['frame'],
+                'image': annotated_image or frame_data['frame'],
                 'result': result,
                 'ontology_analysis': ontology_analysis
             })

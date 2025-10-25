@@ -7,17 +7,20 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.models as models
 from transformers import (
-    VisionEncoderDecoderModel, 
-    ViTImageProcessor, 
+    VisionEncoderDecoderModel,
+    ViTImageProcessor,
     AutoTokenizer,
     BlipProcessor,
     BlipForConditionalGeneration
 )
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import streamlit as st
 from typing import Optional
 import os
+from torchvision.models.detection import fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
+from torchvision.transforms import functional as F
+from torchvision.ops import nms
 
 class CNNImageCaptioner:
     """CNN-based image captioning using ResNet + LSTM"""
@@ -218,16 +221,43 @@ class PersonOnTrackDetector:
     def __init__(self, model_manager):
         self.model_manager = model_manager
         self.transformer_model = model_manager.transformer_model
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.detection_model = None
+        self.detection_weights = None
+        self.person_label_index = None
+        self.detection_error = None
+        self.font = ImageFont.load_default()
     
     def detect_person_on_track(self, image: Image.Image) -> dict:
         """Detect if person is on train tracks using simple reliable approach"""
         
         try:
+            detection_info = self._detect_people(image)
+            
             # Use only reliable Transformer model
             scene_description = self.transformer_model.generate_caption(image, "Describe what you see in this image")
             
             # Simple reliable analysis
-            analysis_result = self._analyze_scene(scene_description)
+            analysis_result = self._analyze_scene(
+                scene_description,
+                detection_info.get("boxes")
+            )
+            
+            if detection_info.get("annotated_image") is not None:
+                analysis_result["annotated_image"] = detection_info["annotated_image"]
+            analysis_result["bounding_boxes"] = detection_info.get("boxes", [])
+            
+            analysis_result.setdefault("detailed_analysis", {})
+            analysis_result["detailed_analysis"]["detection_scales_tested"] = detection_info.get("scales_tested", [])
+            
+            if detection_info.get("threshold_used") is not None:
+                analysis_result.setdefault("detailed_analysis", {})
+                analysis_result["detailed_analysis"]["detection_threshold_used"] = detection_info["threshold_used"]
+                analysis_result["detailed_analysis"]["detection_fallback_used"] = detection_info.get("fallback_used", False)
+            
+            if detection_info.get("error"):
+                analysis_result.setdefault("detailed_analysis", {})
+                analysis_result["detailed_analysis"]["detection_error"] = detection_info["error"]
             
             return analysis_result
             
@@ -240,8 +270,217 @@ class PersonOnTrackDetector:
                 "detailed_analysis": {"error": str(e)}
             }
     
-    def _analyze_scene(self, scene_description):
-        """Simple but reliable scene analysis"""
+    def _load_detection_model(self):
+        """Lazy-load the detection model for people bounding boxes"""
+        if self.detection_model is not None or self.detection_error is not None:
+            return
+        
+        try:
+            weights = FasterRCNN_ResNet50_FPN_Weights.DEFAULT
+            model = fasterrcnn_resnet50_fpn(weights=weights)
+            model.eval()
+            model.to(self.device)
+            
+            self.detection_model = model
+            self.detection_weights = weights
+            
+            categories = weights.meta.get("categories", [])
+            if "person" in categories:
+                # Torchvision models already use matching category indices
+                self.person_label_index = categories.index("person")
+                # Some weight configs include __background__ at index 0. Ensure we map to label 1.
+                if self.person_label_index == 0:
+                    self.person_label_index = 1
+            else:
+                self.person_label_index = 1
+        except Exception as exc:
+            self.detection_error = str(exc)
+            self.detection_model = None
+    
+    def _detect_people(self, image: Image.Image) -> dict:
+        """Run person detection and return bounding boxes plus annotated image"""
+        self._load_detection_model()
+        
+        if self.detection_model is None:
+            return {"boxes": [], "annotated_image": None, "error": self.detection_error}
+        
+        detections, scales_tested = self._run_multiscale_detection(image)
+        
+        person_boxes = [det for det in detections if det["score"] >= 0.6]
+        effective_threshold = 0.6
+        fallback_used = False
+        
+        if not person_boxes and detections:
+            for adaptive_threshold in (0.5, 0.4, 0.3, 0.2, 0.1):
+                filtered = [det for det in detections if det["score"] >= adaptive_threshold]
+                if filtered:
+                    person_boxes = filtered
+                    effective_threshold = adaptive_threshold
+                    break
+        
+        if not person_boxes and detections:
+            detections.sort(key=lambda det: det["score"], reverse=True)
+            top_detection = detections[0].copy()
+            person_boxes = [top_detection]
+            effective_threshold = top_detection["score"]
+            fallback_used = True
+        
+        for box_info in person_boxes:
+            if box_info["score"] < 0.3:
+                box_info["low_confidence"] = True
+        
+        annotated_image = None
+        if person_boxes:
+            annotated_image = self._draw_bounding_boxes(image, person_boxes)
+        
+        return {
+            "boxes": person_boxes,
+            "annotated_image": annotated_image,
+            "threshold_used": effective_threshold if person_boxes else None,
+            "fallback_used": fallback_used,
+            "scales_tested": scales_tested,
+            "error": None
+        }
+
+    def _run_multiscale_detection(self, image: Image.Image):
+        """Run detector on multiple scales to improve small-person recall"""
+        width, height = image.size
+        scales = [1.0]
+        
+        min_side = min(width, height)
+        if min_side < 720:
+            upscale = min(2.0, 720 / max(min_side, 1))
+            if upscale > 1.05:
+                scales.append(round(upscale, 2))
+        if max(width, height) < 512:
+            scales.append(1.5)
+        
+        unique_scales = sorted({round(scale, 2) for scale in scales})
+        detections = []
+        
+        for scale in unique_scales:
+            if not np.isclose(scale, 1.0):
+                new_size = (max(2, int(round(width * scale))), max(2, int(round(height * scale))))
+                scaled_image = image.resize(new_size, Image.BICUBIC)
+            else:
+                scaled_image = image
+            
+            outputs = self._run_detection_model(scaled_image)
+            boxes = outputs.get("boxes", [])
+            scores = outputs.get("scores", [])
+            labels = outputs.get("labels", [])
+            
+            scale_factor = scale
+            for box, score, label in zip(boxes, scores, labels):
+                if label.item() != self.person_label_index:
+                    continue
+                
+                coords = np.array(box.tolist(), dtype=np.float32) / scale_factor
+                xmin, ymin, xmax, ymax = coords.tolist()
+                
+                xmin = float(np.clip(xmin, 0, width - 1))
+                ymin = float(np.clip(ymin, 0, height - 1))
+                xmax = float(np.clip(xmax, 0, width - 1))
+                ymax = float(np.clip(ymax, 0, height - 1))
+                
+                if xmax <= xmin:
+                    xmax = min(width - 1.0, xmin + 1.0)
+                if ymax <= ymin:
+                    ymax = min(height - 1.0, ymin + 1.0)
+                
+                detections.append({
+                    "xmin": int(round(xmin)),
+                    "ymin": int(round(ymin)),
+                    "xmax": int(round(xmax)),
+                    "ymax": int(round(ymax)),
+                    "score": float(score.item()),
+                    "scale": scale_factor
+                })
+        
+        if detections:
+            boxes_tensor = torch.tensor(
+                [[det["xmin"], det["ymin"], det["xmax"], det["ymax"]] for det in detections],
+                dtype=torch.float32,
+                device=self.device
+            )
+            scores_tensor = torch.tensor(
+                [det["score"] for det in detections],
+                dtype=torch.float32,
+                device=self.device
+            )
+            keep_indices = nms(boxes_tensor, scores_tensor, iou_threshold=0.45).tolist()
+            detections = [detections[idx] for idx in keep_indices]
+        
+        return detections, unique_scales
+
+    def _run_detection_model(self, image: Image.Image):
+        """Preprocess image and run the detection model"""
+        if self.detection_weights is not None:
+            preprocess = self.detection_weights.transforms()
+            image_tensor = preprocess(image).to(self.device)
+        else:
+            image_tensor = F.to_tensor(image).to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.detection_model([image_tensor])[0]
+        
+        return outputs
+    
+    def _draw_bounding_boxes(self, image: Image.Image, boxes: list) -> Image.Image:
+        """Draw bounding boxes on image and return annotated copy"""
+        annotated = image.copy()
+        draw = ImageDraw.Draw(annotated)
+        
+        for idx, box_info in enumerate(boxes, start=1):
+            xmin = box_info["xmin"]
+            ymin = box_info["ymin"]
+            xmax = box_info["xmax"]
+            ymax = box_info["ymax"]
+            score = box_info["score"]
+            box_color = "red" if not box_info.get("low_confidence") else "orange"
+            box_width = max(1, xmax - xmin)
+            box_height = max(1, ymax - ymin)
+            margin_x = max(4, int(round(box_width * 0.08)))
+            margin_y = max(4, int(round(box_height * 0.08)))
+            
+            display_xmin = max(0, xmin - margin_x)
+            display_ymin = max(0, ymin - margin_y)
+            display_xmax = min(annotated.width - 1, xmax + margin_x)
+            display_ymax = min(annotated.height - 1, ymax + margin_y)
+            
+            draw.rectangle(
+                [(display_xmin, display_ymin), (display_xmax, display_ymax)],
+                outline=box_color,
+                width=5
+            )
+            
+            label = f"P{idx} {score:.0%}"
+            text_position = (display_xmin, max(display_ymin - 25, 0))
+            
+            if hasattr(draw, "textbbox"):
+                text_bbox = draw.textbbox(text_position, label, font=self.font)
+                text_background = [
+                    text_bbox[0] - 2,
+                    text_bbox[1] - 2,
+                    text_bbox[2] + 2,
+                    text_bbox[3] + 2
+                ]
+            else:
+                text_width, text_height = draw.textsize(label, font=self.font)
+                text_background = [
+                    text_position[0] - 2,
+                    text_position[1] - 2,
+                    text_position[0] + text_width + 2,
+                    text_position[1] + text_height + 2
+                ]
+            
+            draw.rectangle(text_background, fill=box_color)
+            draw.text(text_position, label, fill="white", font=self.font)
+        
+        return annotated
+    
+    def _analyze_scene(self, scene_description, person_detections=None):
+        """Simple but reliable scene analysis with detection results"""
         
         if not scene_description:
             return {
@@ -262,49 +501,49 @@ class PersonOnTrackDetector:
         person_mentions = sum(1 for word in person_words if word in scene_lower)
         track_mentions = sum(1 for word in track_words if word in scene_lower)
         
+        detection_people_count = len(person_detections or [])
+        people_count = detection_people_count or min(person_mentions, 3)
+        
+        has_people = detection_people_count > 0 or person_mentions > 0
+        has_tracks = track_mentions > 0
+        
         # Decision logic
         person_on_track = False
-        people_count = 0
         confidence = 0.6
         
-        if person_mentions > 0 and track_mentions > 0:
-            # Both person and track mentioned
+        if has_people and has_tracks:
             person_on_track = True
-            people_count = min(person_mentions, 3)
-            confidence = 0.7 + min(person_mentions * 0.1, 0.2)
-            analysis = f"Scene shows {people_count} person(s) with train tracks"
+            confidence = 0.75 + min(0.1 * detection_people_count, 0.15)
+            analysis = f"{max(people_count, 1)} person(s) detected near train tracks"
             
-        elif person_mentions > 0:
-            # Person but no tracks
+        elif has_people:
             person_on_track = False
-            people_count = 0
-            confidence = 0.7
-            analysis = "Person detected but not near train tracks"
+            confidence = 0.7 if detection_people_count else 0.6
+            analysis = "Person detected but no train tracks mentioned"
             
-        elif track_mentions > 0:
-            # Tracks but no people - safe
+        elif has_tracks:
             person_on_track = False
-            people_count = 0
             confidence = 0.8
             analysis = "Train tracks visible but no people detected"
             
         else:
-            # Neither mentioned
             person_on_track = False
-            people_count = 0
             confidence = 0.6
             analysis = "No clear person or track detection"
+        
+        detailed_analysis = {
+            "scene_description": scene_description,
+            "person_mentions": person_mentions,
+            "track_mentions": track_mentions,
+            "person_detections": person_detections or []
+        }
         
         return {
             "person_on_track": person_on_track,
             "people_count": people_count,
             "confidence": confidence,
             "analysis": analysis,
-            "detailed_analysis": {
-                "scene_description": scene_description,
-                "person_mentions": person_mentions,
-                "track_mentions": track_mentions
-            }
+            "detailed_analysis": detailed_analysis
         }
 
 
