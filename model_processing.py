@@ -25,7 +25,11 @@ def process_image_locally(image: Image.Image, prompt: str, model_name: str, loca
         if model_name == "Person on Track Detector":
             # Special handling for person-on-track detection
             result = local_manager.person_on_track_detector.detect_person_on_track(image)
-            return {"person_on_track_detection": result}
+            annotated_image = result.pop("annotated_image", None)
+            return {
+                "person_on_track_detection": result,
+                "annotated_image": annotated_image
+            }
         else:
             caption = local_manager.generate_caption(model_name, image, prompt)
             return {"generated_text": caption}

@@ -257,16 +257,46 @@ def _render_person_detection_result(detection: Dict[str, Any]):
     people_count = detection.get('people_count', 0)
     confidence = detection.get('confidence', 0)
     analysis = detection.get('analysis', 'No analysis')
-    
+    person_on_track = detection.get('person_on_track', False)
+    bounding_boxes = detection.get('bounding_boxes', [])
+
     st.write(f"**Detection Analysis:** {analysis}")
-    
-    # Show metrics
+    st.write(f"**Person on Track:** {'Yes' if person_on_track else 'No'}")
+
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("👥 People Detected", people_count)
+        st.metric("People Detected", people_count)
     with col2:
-        st.metric("📊 Model Confidence", f"{confidence:.0%}")
+        st.metric("Model Confidence", f"{confidence:.0%}")
 
+    detection_details = detection.get('detailed_analysis', {})
+    if isinstance(detection_details, dict):
+        threshold_used = detection_details.get('detection_threshold_used')
+        fallback_used = detection_details.get('detection_fallback_used')
+        scales_tested = detection_details.get('detection_scales_tested')
+        if threshold_used is not None:
+            fallback_note = " (auto fallback for low-confidence detections)" if fallback_used else ""
+            st.caption(f"Detection threshold used: {threshold_used:.2f}{fallback_note}")
+        if detection_details.get('detection_error'):
+            st.caption(f"Detector notice: {detection_details['detection_error']}")
+        if scales_tested:
+            scale_labels = ", ".join(f"{scale:.2f}x" for scale in scales_tested)
+            st.caption(f"Detection scales evaluated: {scale_labels}")
+
+    if bounding_boxes:
+        st.write("Detected people bounding boxes:")
+        for idx, box in enumerate(bounding_boxes, start=1):
+            box_caption = (
+                f"{idx}. ({box['xmin']}, {box['ymin']}) to ({box['xmax']}, {box['ymax']}) "
+                f"- score {box['score']:.2f}"
+            )
+            if box.get('low_confidence'):
+                box_caption += " (low confidence)"
+            st.caption(box_caption)
+        if any(box.get('low_confidence') for box in bounding_boxes):
+            st.caption("Orange overlays mark low-confidence detections.")
+    else:
+        st.caption("No people detected by the local model.")
 
 def _render_general_model_result(result: Dict[str, Any]):
     """Render general model results (captioning, etc.)"""
